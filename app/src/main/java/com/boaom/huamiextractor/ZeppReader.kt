@@ -56,7 +56,8 @@ object ZeppReader {
 
         val dst = targetDir.absolutePath
         val uid = android.os.Process.myUid()
-        val gid = android.os.Process.myGid()
+        // Android 没有 Process.myGid()，用 uid 兜（同一 App 内 uid/gid 通常一致）
+        val gid = uid
         val cmd = StringBuilder()
         picks.forEach { cmd.append("cp -f '$DB_DIR/$it' '$dst/' 2>/dev/null; ") }
         // 关键修复：root 拷的文件默认 root:root 600，App 读不了 → chown + chmod
@@ -70,7 +71,10 @@ object ZeppReader {
         val after = ShizukuGate.runShell(cmd.toString())
         val copied = after.lines().map { it.trim() }
             .filter { it.isNotEmpty() && !it.startsWith("total") }
-            .map { it.split(/\s+/).lastOrNull() ?: "" }
+            .mapNotNull { line ->
+                val parts = line.split(' ').filter { it.isNotEmpty() }
+                parts.lastOrNull()
+            }
             .filter { it.isNotEmpty() }
         Log.i(TAG, "copied ${copied.size} files")
         return copied.map { File(targetDir, it) }.filter { it.exists() }

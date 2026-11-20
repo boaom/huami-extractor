@@ -50,7 +50,6 @@ android {
     }
     buildFeatures {
         viewBinding = true
-        aidl = true
     }
 }
 

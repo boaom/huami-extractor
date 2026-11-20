@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.os.IBinder
+import android.os.Parcel
 import android.os.RemoteException
 import rikka.shizuku.Shizuku
 import java.util.concurrent.CountDownLatch
@@ -26,7 +27,7 @@ object ShizukuGate {
     const val REQUEST_CODE = 1001
 
     private var appContext: Context? = null
-    @Volatile private var remote: IShellService? = null
+    @Volatile private var remote: IBinder? = null
     private var serviceArgs: Shizuku.UserServiceArgs? = null
 
     fun init(context: Context) {
@@ -49,14 +50,32 @@ object ShizukuGate {
     /** 以 root 身份执行一条命令，返回 stdout；失败抛异常。 */
     fun runShell(cmd: String): String {
         if (!permissionGranted()) throw IllegalStateException("Shizuku 未授权")
-        return ensureUserService().exec(cmd)
+        val binder = ensureUserService()
+        val data = Parcel.obtain()
+        val reply = Parcel.obtain()
+        try {
+            data.writeString(cmd)
+            if (!binder.transact(ShellService.TRANSACTION_EXEC, data, reply, 0)) {
+                throw IllegalStateException("root 执行失败")
+            }
+            reply.readException()
+            val err = reply.readString()
+            val out = reply.readString() ?: ""
+            if (!err.isNullOrEmpty()) throw IllegalStateException("命令出错: ${err.take(500)}")
+            return out
+        } catch (e: RemoteException) {
+            throw IllegalStateException("IPC 失败: ${e.message}")
+        } finally {
+            data.recycle()
+            reply.recycle()
+        }
     }
 
     fun deviceInfo(): String =
         runShell("id; getprop ro.product.model; getprop ro.build.version.release")
 
     /** 确保 UserService（root 进程）已连上 */
-    private fun ensureUserService(): IShellService {
+    private fun ensureUserService(): IBinder {
         remote?.let { return it }
         val ctx = appContext ?: throw IllegalStateException("ShizukuGate 未初始化")
         val latch = CountDownLatch(1)
@@ -72,10 +91,10 @@ object ShizukuGate {
 
         val conn = object : ServiceConnection {
             override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
-                try {
-                    remote = IShellService.Stub.asInterface(service)
-                } catch (e: Exception) {
-                    failure = e
+                if (service == null) {
+                    failure = IllegalStateException("服务返回空 binder")
+                } else {
+                    remote = service
                 }
                 latch.countDown()
             }

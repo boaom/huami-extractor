@@ -116,7 +116,11 @@ object ZeppReader {
 
         val byDay = segs.groupBy { it.day }
         return byDay.map { (day, list) ->
-            val stages = list.groupingBy { it.stage }.fold(0) { acc, g -> acc + g.sumOf { (it.end - it.start) / 60000L }.toInt() }
+            val stages = HashMap<Int, Int>()
+            for (seg in list) {
+                val mins = ((seg.end - seg.start) / 60000L).toInt()
+                stages[seg.stage] = (stages[seg.stage] ?: 0) + mins
+            }
             val s = list.minOf { it.start }
             val e = list.maxOf { it.end }
             val hr = rangeAvg(db, 17001, s, e)

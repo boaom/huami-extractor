@@ -104,6 +104,10 @@ class MainActivity : AppCompatActivity() {
                     }
                     if (plan.note.isNotEmpty()) append("  ! ${plan.note}")
 
+                    if (last != null && last.sets.isEmpty()) {
+                        append("  ⚠ 该记录无逐组明细（新格式，2026-11-11 起手表不再上传）")
+                        append("    只能用汇总值：${last.totalGroup} 组 / ${last.durSec / 60} 分钟 / 负荷 ${last.exerciseLoad}")
+                    }
                     last?.sets?.groupBy { it.first }?.toSortedMap()?.forEach { (code, st) ->
                         append("  动作码 $code：${st.size} 组，均次 " +
                                 "${st.map { it.second }.average().toInt()} → " +

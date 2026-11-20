@@ -18,6 +18,14 @@ import java.util.Locale
  *    只能按名字精确定位，别用 startsWith 匹配
  *  - 是 WAL 模式，**必须连 -wal / -shm 一起拷**，否则数据不全或损坏
  *  - TRACKRECORD 里**没有 TOTAL_GROUP 这一列**，组数只在 ORIGINAL_JSON_DATA 里
+ *  - ⚠ **逐组明细有两种格式**（2026-11 实测）：
+ *      旧格式（<= 2026-11-10）：ORIGINAL_JSON_DATA.strength_training_group
+ *          = [{"actionType":码,"count":次数}]，逐组可读
+ *      新格式（>= 2026-11-11）：ORIGINAL_JSON_DATA 换成 221 字段的通用运动模板
+ *          （含潜水/滑雪/高尔夫等一堆无关运动），**strength_training_group 整个字段消失**，
+ *          只剩 total_group / exercise_load / te / restTimeBetweenGroupsWithMillis 等汇总值。
+ *          逐组明细在本地库中已确认不存在（已全库 grep actionType，只有旧记录命中）
+ *    所以新记录只能给到「组数 + 时长 + 心率 + 负荷」，次数逐组要靠用户自己补。
  *  - 睡眠分段的 endDate 就是**绝对结束时刻**；startOffset/endOffset 是分钟偏移，
  *    基准 = startDate 当天零点 **减一天**。段长 = endOffset - startOffset，
  *    段起点 = endDate - 段长（这样跨零点不会算错）

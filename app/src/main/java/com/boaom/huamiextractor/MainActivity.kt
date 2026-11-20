@@ -19,6 +19,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        ShizukuGate.init(applicationContext)
         setContentView(R.layout.activity_main)
         logView = findViewById(R.id.log)
 

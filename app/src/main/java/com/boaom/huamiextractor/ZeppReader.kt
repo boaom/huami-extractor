@@ -76,6 +76,9 @@ object ZeppReader {
         val deepPct: Int get() = if (asleepMin > 0) (deepMin * 100 / asleepMin) else 0
     }
 
+    /** 单段睡眠 */
+    private class Seg(val day: String, val start: Long, val end: Long, val stage: Int)
+
     private const val STAGE_LIGHT = 4
     private const val STAGE_DEEP = 5
     private const val STAGE_REM = 8
@@ -95,8 +98,6 @@ object ZeppReader {
             WHERE s.sampleType = 11003 AND s.startDate >= ?
             ORDER BY s.startDate, es.numericalValue
         """.trimIndent()
-
-        data class Seg(val day: String, val start: Long, val end: Long, val stage: Int)
 
         val segs = ArrayList<Seg>()
         db.rawQuery(sql, arrayOf(cutoff.toString())).use { c ->

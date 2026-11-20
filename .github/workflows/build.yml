@@ -3,13 +3,14 @@ name: Build APK
 on:
   push:
     branches: [main]
-  pull_request:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
+    # ubuntu-22.04：android-actions/setup-android@v3 在更新的 runner 镜像上
+    # 会因为 'tools' 包已下线而崩，这里改为手工装 SDK，不依赖该 action。
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
@@ -20,13 +21,25 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Accept SDK licenses
+      - name: Install Android SDK (manual)
         run: |
+          set -euo pipefail
+          export ANDROID_HOME="$HOME/Android/Sdk"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          cd /tmp
+          curl -fsSL -o cmdline.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q cmdline.zip -d "$ANDROID_HOME/cmdline-tools"
+          mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+
+      - name: Accept licenses & install packages
+        run: |
+          set -euo pipefail
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" > /dev/null 2>&1 || true
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
       - name: Cache Gradle
         uses: actions/cache@v4
@@ -40,7 +53,7 @@ jobs:
       - name: Build debug APK
         run: ./gradlew assembleDebug --no-daemon --stacktrace
 
-      - name: Upload APK
+      - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: huami-extractor-debug-apk

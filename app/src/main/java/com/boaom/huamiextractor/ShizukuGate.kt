@@ -9,13 +9,18 @@ import rikka.shizuku.ShizukuRemoteProcess
  * Shizuku 借系统权限执行 shell。
  * 手机已用 Magisk 给 Shizuku uid=0，因此这里读得到 Zepp 应用沙箱内的数据库。
  *
- * 注意：Shizuku.newProcess 返回的是 ShizukuRemoteProcess（不是 java.lang.Process），
- * 只能读 stdout/stderr，**不能往 stdin 写**（getOutputStream 是只读的退化实现）。
- * 因此所有命令都以 "sh -c" 形式一次性给出，不做交互。
+ * 注意：Shizuku.newProcess 返回 ShizukuRemoteProcess（不是 java.lang.Process），
+ * 只能读 stdout/stderr，不能往 stdin 写。所以所有命令都以 "sh -c" 一次性给出。
  */
 object ShizukuGate {
 
     const val REQUEST_CODE = 1001
+
+    private var appContext: Context? = null
+
+    fun init(context: Context) {
+        appContext = context.applicationContext
+    }
 
     fun binderAlive(): Boolean = Shizuku.pingBinder()
 
@@ -33,7 +38,8 @@ object ShizukuGate {
     /** 以 shell 执行一条命令，返回 stdout；失败抛异常。 */
     fun runShell(cmd: String): String {
         if (!permissionGranted()) throw IllegalStateException("Shizuku 未授权")
-        val workDir = Context.getDir("work", Context.MODE_PRIVATE).absolutePath
+        val ctx = appContext ?: throw IllegalStateException("ShizukuGate 未初始化")
+        val workDir = ctx.getDir("work", Context.MODE_PRIVATE).absolutePath
         val process: ShizukuRemoteProcess =
             Shizuku.newProcess(arrayOf("sh", "-c", cmd), null, workDir)
         val out = process.inputStream.bufferedReader().use { it.readText() }

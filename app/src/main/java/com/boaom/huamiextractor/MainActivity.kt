@@ -61,9 +61,12 @@ class MainActivity : AppCompatActivity() {
                     val files = ZeppReader.pullDatabases(dir)
                     append("已拷 ${files.size} 个文件：" + files.joinToString(", ") { it.name })
 
-                    val hm = files.firstOrNull { it.name.startsWith("HealthMatrix") }
-                    val origin = files.firstOrNull { it.name.startsWith("origin_db") }
-                    if (hm == null || origin == null) throw IllegalStateException("缺少关键库")
+                    val hm = ZeppReader.findHealthMatrix(files)
+                    val origin = ZeppReader.findOriginDb(files)
+                    if (hm == null || origin == null) {
+                        throw IllegalStateException("缺少关键库，已拷: " + files.joinToString(", ") { it.name })
+                    }
+                    append("选用: ${hm.name} / ${origin.name}")
 
                     val hmDb = ZeppReader.open(hm)
                     val sleep = ZeppReader.readSleep(hmDb, 28)

@@ -13,12 +13,15 @@ import java.util.Locale
  *  - 库文件头是 "SQLite format 3"，**没有任何加密**，不需要 SQLCipher
  *  - 库在 /data/data/com.huami.watch.hmwatchmanager/databases/
  *      HealthMatrix_<uid>.db   健康矩阵（睡眠分期 / 心率 / 血氧）
- *      origin_db_<hash>        运动记录（TRACKRECORD，含力量训练逐组）
+ *      origin_db_<32位hash>    运动记录（TRACKRECORD，含力量训练逐组）
+ *    同目录还有 HealthMatrix_0.db / origin_db_0 / origin_db_default 等**空壳或无关库**，
+ *    只能按名字精确定位，别用 startsWith 匹配
  *  - 是 WAL 模式，**必须连 -wal / -shm 一起拷**，否则数据不全或损坏
  *  - TRACKRECORD 里**没有 TOTAL_GROUP 这一列**，组数只在 ORIGINAL_JSON_DATA 里
  *  - 睡眠分段的 endDate 就是**绝对结束时刻**；startOffset/endOffset 是分钟偏移，
  *    基准 = startDate 当天零点 **减一天**。段长 = endOffset - startOffset，
  *    段起点 = endDate - 段长（这样跨零点不会算错）
+ *  - root 拷出来的文件属主是 root，**App 进程读不了**，必须 chown 回自己 + chmod
  */
 object ZeppReader {
 
@@ -28,35 +31,75 @@ object ZeppReader {
     private const val TAG = "ZeppReader"
     private val FMT = SimpleDateFormat("yyyy-MM-dd", Locale.US)
 
-    private val WANTED = listOf(
-        Regex("^HealthMatrix_.*\\.db$"),
-        Regex("^origin_db_.*$")
-    )
+    /** 真正要用的库（精确匹配，排除空壳库） */
+    private val RE_HEALTH = Regex("^HealthMatrix_[1-9]\\d*\\.db$")
+    private val RE_ORIGIN = Regex("^origin_db_[0-9a-f]{32}$")
 
-    /** 拷库：连 -wal/-shm 一起，落到本应用私有目录 */
+    /**
+     * 拷库：连 -wal/-shm 一起，落到本应用私有目录。
+     * 关键：拷完必须 chown 回本 App 的 uid 并放开权限，否则 root 建的文件 App 自己读不了。
+     */
     fun pullDatabases(targetDir: File): List<File> {
         if (!targetDir.exists()) targetDir.mkdirs()
         val listing = ShizukuGate.runShell("ls -1 $DB_DIR 2>/dev/null")
         val names = listing.lines().map { it.trim() }.filter { it.isNotEmpty() }
 
+        // 找出主库文件，再把它们的 -wal/-shm/-journal 一并带上
+        val primaries = names.filter { RE_HEALTH.matches(it) || RE_ORIGIN.matches(it) }
+        if (primaries.isEmpty()) throw IllegalStateException("没找到目标库，目录内容:\n$listing")
+
         val picks = LinkedHashSet<String>()
-        for (n in names) {
-            val base = n.removeSuffix("-wal").removeSuffix("-shm").removeSuffix("-journal")
-            if (WANTED.any { it.matches(base) }) picks.add(n)
+        for (p in primaries) {
+            picks.add(p)
+            names.filter { it.startsWith(p) && it != p }.forEach { picks.add(it) }
         }
-        if (picks.isEmpty()) throw IllegalStateException("没找到目标库，目录内容:\n$listing")
 
         val dst = targetDir.absolutePath
-        val cmd = picks.joinToString("; ") { "cp -f '$DB_DIR/$it' '$dst/'" } +
-            "; chmod 700 '$dst'; ls -1 '$dst'"
-        val after = ShizukuGate.runShell(cmd)
-        val copied = after.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        val uid = android.os.Process.myUid()
+        val gid = android.os.Process.myGid()
+        val cmd = StringBuilder()
+        picks.forEach { cmd.append("cp -f '$DB_DIR/$it' '$dst/' 2>/dev/null; ") }
+        // 关键修复：root 拷的文件默认 root:root 600，App 读不了 → chown + chmod
+        // chown 对某些 root 沙箱不可用，所以同时用 chmod 兜底
+        cmd.append("chown -R $uid:$gid '$dst' 2>/dev/null; ")
+        cmd.append("chmod 755 '$dst' 2>/dev/null; ")
+        cmd.append("chmod 666 '$dst'/* 2>/dev/null; ")
+        cmd.append("chmod 644 '$dst'/* 2>/dev/null; ")
+        cmd.append("ls -l '$dst'")
+
+        val after = ShizukuGate.runShell(cmd.toString())
+        val copied = after.lines().map { it.trim() }
+            .filter { it.isNotEmpty() && !it.startsWith("total") }
+            .map { it.split(/\s+/).lastOrNull() ?: "" }
+            .filter { it.isNotEmpty() }
         Log.i(TAG, "copied ${copied.size} files")
         return copied.map { File(targetDir, it) }.filter { it.exists() }
     }
 
-    fun open(file: File): SQLiteDatabase =
-        SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
+    /** 选真正的健康矩阵库（排除 HealthMatrix_0.db） */
+    private fun pickHealth(files: List<File>): File? =
+        files.filter { RE_HEALTH.matches(it.name) }
+            .maxByOrNull { it.length() }
+
+    /** 选真正的 origin_db（排除 origin_db_0 / origin_db_default） */
+    private fun pickOrigin(files: List<File>): File? =
+        files.filter { RE_ORIGIN.matches(it.name) }
+            .maxByOrNull { it.length() }
+
+    /**
+     * 打开库。
+     * 用 READWRITE 而不是 READONLY：WAL 模式下只读连接需要能写 -shm，
+     * 刚 chown 过来的副本 shm 是 root 建的要先修好；同时 RW 打开能让 SQLite
+     * 自动做 WAL 恢复，避免"database disk image is malformed"。
+     */
+    fun open(file: File): SQLiteDatabase {
+        return try {
+            SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
+        } catch (e: Exception) {
+            Log.w(TAG, "RW 打开失败，退回只读: ${e.message}")
+            SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
+        }
+    }
 
     // ---------------- 睡眠 ----------------
 
@@ -75,9 +118,6 @@ object ZeppReader {
         val asleepMin: Int get() = lightMin + deepMin + remMin
         val deepPct: Int get() = if (asleepMin > 0) (deepMin * 100 / asleepMin) else 0
     }
-
-    /** 单段睡眠 */
-    private class Seg(val day: String, val start: Long, val end: Long, val stage: Int)
 
     private const val STAGE_LIGHT = 4
     private const val STAGE_DEEP = 5
@@ -99,7 +139,9 @@ object ZeppReader {
             ORDER BY s.startDate, es.numericalValue
         """.trimIndent()
 
-        val segs = ArrayList<Seg>()
+        data class Seg2(val day: String, val start: Long, val end: Long, val stage: Int)
+
+        val segs = ArrayList<Seg2>()
         db.rawQuery(sql, arrayOf(cutoff.toString())).use { c ->
             while (c.moveToNext()) {
                 val startDate = c.getLong(0)
@@ -109,7 +151,7 @@ object ZeppReader {
                 val eo = c.getInt(4)
                 val durMin = (eo - so).coerceAtLeast(0)
                 val segStart = endDate - durMin * 60000L
-                segs.add(Seg(FMT.format(java.util.Date(startDate)), segStart, endDate, stage))
+                segs.add(Seg2(FMT.format(java.util.Date(startDate)), segStart, endDate, stage))
             }
         }
         if (segs.isEmpty()) return emptyList()
@@ -215,4 +257,7 @@ object ZeppReader {
         }
         return out
     }
+
+    fun findHealthMatrix(files: List<File>): File? = pickHealth(files)
+    fun findOriginDb(files: List<File>): File? = pickOrigin(files)
 }

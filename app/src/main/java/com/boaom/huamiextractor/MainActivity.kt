@@ -70,8 +70,8 @@ class MainActivity : AppCompatActivity() {
                     append("== 睡眠：${sleep.size} 晚")
                     sleep.takeLast(7).forEach {
                         append("  ${it.day}  睡 ${it.asleepMin / 60}h${it.asleepMin % 60}m" +
-                                "  深 ${it.deepMin}m  REM ${it.remMin}m  浅 ${it.lightMin}m" +
-                                "  夜均心率 ${it.avgHr}")
+                                "  深 ${it.deepMin}m(${it.deepPct}%)  REM ${it.remMin}m  浅 ${it.lightMin}m" +
+                                "  夜均心率 ${it.avgHr}  血氧 ${it.avgSpo2}")
                     }
 
                     val od = ZeppReader.open(origin)
